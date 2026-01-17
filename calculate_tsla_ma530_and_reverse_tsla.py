@@ -1,5 +1,6 @@
 import pandas as pd  # 导入 pandas 库，用于数据处理和分析
 import numpy as np   # 导入 numpy 库，用于数值计算（虽然在这个版本中主要用了 pandas 的功能）
+import matplotlib.pyplot as plt  # 导入 matplotlib 用于绘图
 
 # 定义一个常量，表示初始投资本金，用于百分比计算
 # 假设初始资金为 1,000,000 USD (参考您图片中的持仓价值)
@@ -37,43 +38,144 @@ def calculate_performance_metrics(df):
     # 使用 Net P&L % 进行复利计算，基于equity曲线计算最大回撤
     max_drawdown_pct = calculate_advanced_dynamic_dd(df)
     
+    # 计算Profit Factor
+    total_profit = df[df['Net P&L USD'] > 0]['Net P&L USD'].sum()
+    total_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
+    profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
+    
     # 返回一个字典，包含所有计算出的指标（只显示百分比格式）
     return {
         "Total Net Profit (%)": total_net_profit_pct,
         "Total Trades": total_trades,
         "Win Rate (%)": win_rate,
-        "Maximum Drawdown (%)": max_drawdown_pct
+        "Maximum Drawdown (%)": max_drawdown_pct,
+        "Profit Trades": winning_trades_count,
+        "Profit Factor": profit_factor,
+        "Total Net Profit (USD)": df['Net P&L USD'].sum()
     }
 
 
-def calculate_simple_drawdown(df):
+def plot_equity_curve(df, title="Equity Curve"):
     """
-    计算交易close之后的最大回撤（基于equity曲线）
-    只考虑每笔交易结算后的资金曲线，不考虑交易过程中的Adverse excursion
+    绘制类似PineScript回测的图表
+    显示equity曲线、交易点、trade excursion和统计信息
     """
-    # 创建df的副本，避免修改原始数据
-    df = df.copy()
+    # 计算equity曲线
+    net_pnl_pct = df['Net P&L %'].values / 100
+    equity_curve = np.cumprod(1 + net_pnl_pct) * INITIAL_EQUITY
     
-    # 1. 计算每笔交易结算后的账户资金 (Equity)
-    # 使用Net P&L %进行复利计算，假设初始资金为 1.0
-    # Net P&L %已经是百分比形式（如-0.74表示-0.74%），需要除以100转换为小数
-    net_pnl_pct = df['Net P&L %'].values / 100  # 转换为小数形式（如-0.74 -> -0.0074）
-    df['cum_pnl_factor'] = np.cumprod(1 + net_pnl_pct)
-    df['equity_end'] = df['cum_pnl_factor']  # 每笔交易结算后的资金
+    # 计算每个交易点的equity
+    equity_start = np.concatenate([[INITIAL_EQUITY], equity_curve[:-1]])
+    equity_end = equity_curve
     
-    # 2. 计算资金曲线的峰值（到目前为止达到的最高点）序列
-    peak = df['equity_end'].cummax()
+    # 计算trade excursion（交易过程中的波动）
+    favorable_excursion_pct = df['Favorable excursion %'].values / 100
+    adverse_excursion_pct = df['Adverse excursion %'].values / 100
+    intra_trade_high = equity_start * (1 + favorable_excursion_pct)
+    intra_trade_low = equity_start * (1 + adverse_excursion_pct)
     
-    # 3. 计算回撤（峰值减去当前资金曲线值）
-    drawdown = peak - df['equity_end']
+    # 计算统计信息
+    total_pnl = df['Net P&L USD'].sum()
+    total_trades = len(df)
+    profit_trades = (df['Net P&L USD'] > 0).sum()
+    total_profit = df[df['Net P&L USD'] > 0]['Net P&L USD'].sum()
+    total_loss = abs(df[df['Net P&L USD'] < 0]['Net P&L USD'].sum())
+    profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
     
-    # 4. 计算回撤百分比：回撤 / 峰值 * 100
-    drawdown_pct = (drawdown / peak) * 100
+    # 计算最大回撤
+    # 将numpy数组转换为pandas Series以使用cummax方法
+    running_peak = pd.Series(equity_start).cummax().values
+    drawdown_from_equity = (running_peak - intra_trade_low) / running_peak * 100
+    max_drawdown = drawdown_from_equity.max()
     
-    # 5. 最大回撤百分比：所有行中回撤百分比的最大值
-    max_drawdown_pct = drawdown_pct.max()
+    # 创建图形
+    fig, ax = plt.subplots(figsize=(14, 8))
     
-    return max_drawdown_pct
+    # 绘制equity曲线
+    x = range(len(df))
+    ax.plot(x, equity_curve, 'b-', linewidth=2, label='Equity Curve', zorder=3)
+    
+    # 绘制每个交易点
+    entry_plotted = False
+    exit_profit_plotted = False
+    exit_loss_plotted = False
+    
+    for i in range(len(df)):
+        # Entry点（交易开始）- 绿色向上箭头
+        if not entry_plotted:
+            ax.scatter(i, equity_start[i], color='green', marker='^', s=50, zorder=4, alpha=0.7, label='Entry Point')
+            entry_plotted = True
+        else:
+            ax.scatter(i, equity_start[i], color='green', marker='^', s=50, zorder=4, alpha=0.7)
+        
+        # Exit点（交易结束）
+        if df.iloc[i]['Net P&L USD'] < 0:
+            # 亏损交易 - 红色向下箭头
+            if not exit_loss_plotted:
+                ax.scatter(i, equity_end[i], color='red', marker='v', s=50, zorder=4, alpha=0.7, label='Exit (Loss)')
+                exit_loss_plotted = True
+            else:
+                ax.scatter(i, equity_end[i], color='red', marker='v', s=50, zorder=4, alpha=0.7)
+        else:
+            # 盈利交易 - 蓝色向下箭头
+            if not exit_profit_plotted:
+                ax.scatter(i, equity_end[i], color='blue', marker='v', s=50, zorder=4, alpha=0.7, label='Exit (Profit)')
+                exit_profit_plotted = True
+            else:
+                ax.scatter(i, equity_end[i], color='blue', marker='v', s=50, zorder=4, alpha=0.7)
+        
+        # 绘制trade excursion（交易过程中的波动范围）
+        ax.plot([i, i], [intra_trade_low[i], intra_trade_high[i]], 
+                color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=2)
+        ax.scatter(i, intra_trade_high[i], color='lightgreen', marker='o', s=30, zorder=3, alpha=0.5)
+        ax.scatter(i, intra_trade_low[i], color='lightcoral', marker='o', s=30, zorder=3, alpha=0.5)
+    
+    # 绘制running peak线
+    ax.plot(x, running_peak, 'r--', linewidth=1, alpha=0.5, label='Running Peak', zorder=1)
+    
+    # 检查是否需要使用对数坐标（如果equity变化超过100倍）
+    equity_range = equity_curve.max() / equity_curve.min() if equity_curve.min() > 0 else 1
+    use_log_scale = equity_range > 100
+    
+    if use_log_scale:
+        ax.set_yscale('log')
+        ylabel = 'Equity (USD, Log Scale)'
+    else:
+        ylabel = 'Equity (USD)'
+    
+    # 计算Total P&L百分比
+    total_pnl_pct = (total_pnl / INITIAL_EQUITY) * 100
+    
+    # 计算Profit Trades百分比（胜率）
+    profit_trades_pct = (profit_trades / total_trades * 100) if total_trades > 0 else 0
+    
+    # 添加统计信息文本框 - 放在右下方
+    stats_text = f"Total P&L: {total_pnl_pct:.2f}%\n"
+    stats_text += f"Max Drawdown: {max_drawdown:.2f}%\n"
+    stats_text += f"Total Trades: {total_trades}\n"
+    stats_text += f"Profit Trades: {profit_trades_pct:.2f}%\n"
+    stats_text += f"Profit Factor: {profit_factor:.2f}"
+    
+    # 将统计信息框放在右下方
+    ax.text(0.98, 0.02, stats_text, transform=ax.transAxes, 
+            fontsize=10, verticalalignment='bottom', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # 设置标签和标题
+    ax.set_xlabel('Trade Number', fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    # 图例放在左上角，避免与统计信息框重叠
+    ax.legend(loc='upper left', fontsize=9)
+    
+    # 格式化y轴为货币格式（如果不是对数坐标）
+    if not use_log_scale:
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x/1000:.0f}K'))
+    
+    plt.tight_layout()
+    return fig
 
 
 def calculate_advanced_dynamic_dd(df):
@@ -209,6 +311,26 @@ def merge_alternating_trades(file_a_path, file_b_path):
             print(f"{key}: {value:.2f}")
         else:
             print(f"{key}: {value}")
+    
+    # --- 绘制图表 ---
+    print("\n--- 生成图表 ---")
+    # 绘制综合整体图表
+    fig1 = plot_equity_curve(combined_df, title="Combined Strategy - Equity Curve")
+    plt.savefig('combined_strategy_equity_curve.png', dpi=300, bbox_inches='tight')
+    print("已保存: combined_strategy_equity_curve.png")
+    
+    # 绘制A策略图表
+    fig2 = plot_equity_curve(df_a_subset, title="buy tsla on ma530 strategy - Equity Curve")
+    plt.savefig('strategy_A_equity_curve.png', dpi=300, bbox_inches='tight')
+    print("已保存: strategy_A_equity_curve.png")
+    
+    # 绘制B策略图表
+    fig3 = plot_equity_curve(df_b_subset, title="buy azo on sell tsla on ma530 strategy - Equity Curve")
+    plt.savefig('strategy_B_equity_curve.png', dpi=300, bbox_inches='tight')
+    print("已保存: strategy_B_equity_curve.png")
+    
+    # 显示图表（可选，如果不需要显示可以注释掉）
+    # plt.show()
         
     return combined_df # 返回合并后的 DataFrame (可选)
 

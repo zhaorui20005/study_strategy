@@ -35,7 +35,7 @@ def calculate_performance_metrics(df):
     
     # 4. 最大回撤 (Maximum Drawdown) - 只计算交易close之后的最大回撤
     # 使用 Net P&L % 进行复利计算，基于equity曲线计算最大回撤
-    max_drawdown_pct = calculate_simple_drawdown(df)
+    max_drawdown_pct = calculate_advanced_dynamic_dd(df)
     
     # 返回一个字典，包含所有计算出的指标（只显示百分比格式）
     return {
@@ -80,9 +80,9 @@ def calculate_advanced_dynamic_dd(df):
     """
     计算动态最大回撤
     按照用户描述的逻辑：
-    1. 收益率10%, adverse_excursion = -5% -> 最大回撤 = -5%
-    2. 收益率-5%, adverse_excursion = -5.1% -> 最大回撤 = -5.1%
-    3. 收益率-0.5%, adverse_excursion = -1% -> 最大回撤 = -6%
+    1. 收益率10%, adverse_excursion = -5% -> 最大回撤 = 5%
+    2. 收益率-5%, adverse_excursion = -5.1% -> 最大回撤 = 5.1%
+    3. 收益率-0.5%, adverse_excursion = -1% -> 最大回撤 = 6%
     
     注意：
     - Favorable excursion % 永远为非负数，已经是百分比形式（如13.24表示13.24%）
@@ -104,41 +104,42 @@ def calculate_advanced_dynamic_dd(df):
     df['cum_pnl_factor'] = np.cumprod(1 + net_pnl_pct)
     df['equity_start'] = df['cum_pnl_factor'].shift(1).fillna(1.0)
     
-    # 2. 计算交易过程中的 动态最高点 (Intra-trade Peak)
-    # 账户在此笔交易中达到的最高点 = 交易前资金 * (1 + 最大浮盈率)
-    # Favorable excursion %已经是百分比形式（如13.24表示13.24%），需要除以100转换为小数
-    favorable_excursion_pct = df['Favorable excursion %'].values / 100  # 转换为小数形式
-    df['intra_trade_high'] = df['equity_start'].values * (1 + favorable_excursion_pct)
-    
-    # 3. 计算结算后的 账户资金
+    # 2. 计算结算后的 账户资金
     df['equity_end'] = df['equity_start'].values * (1 + net_pnl_pct)
     
-    # 4. 更新 历史全局最高点 (Running Peak)
-    # 历史最高点不仅看结算后的资金，也要看交易过程中的最大浮盈点
-    df['current_max'] = df[['intra_trade_high', 'equity_end']].max(axis=1)
-    df['running_peak'] = df['current_max'].cummax()
+    # 3. 更新 历史全局最高点 (Running Peak)
+    # 只计算到当前交易开始前（equity_start），不考虑当前交易
+    df['running_peak'] = df['equity_start'].cummax()
     
-    # 5. 计算 动态最低点 (Intra-trade Low)
+    # 4. 计算 动态最低点 (Intra-trade Low)
     # 账户在此笔交易中达到的最低点 = 交易前资金 * (1 + 最大不利变动率)
     # Adverse excursion %已经是百分比形式（如-4.41表示-4.41%），需要除以100转换为小数
     adverse_excursion_pct = df['Adverse excursion %'].values / 100  # 转换为小数形式（已经是负数）
     df['intra_trade_low'] = df['equity_start'].values * (1 + adverse_excursion_pct)
     
-    # 6. 计算基于equity曲线的回撤百分比
+    # 5. 计算基于equity曲线的回撤百分比
     # 回撤 = (峰值 - 当前最低点) / 峰值 * 100
     drawdown_from_equity = (df['running_peak'] - df['intra_trade_low']) / df['running_peak'] * 100
+    df['drawdown_from_equity'] = drawdown_from_equity
     
-    # 7. 获取Adverse excursion %（取绝对值，因为它是负数）
+    # 6. 获取Adverse excursion %（取绝对值，因为它是负数）
     # Adverse excursion %已经是百分比形式，直接使用
     adverse_excursion_pct_abs = df['Adverse excursion %'].abs()
     
-    # 8. 按照用户描述的逻辑：当前的最大回撤 = max(之前所有交易的最大回撤, 当前equity曲线的回撤%, 当前交易的Adverse excursion %)
+    # 7. 按照用户描述的逻辑：当前的最大回撤 = max(当前equity曲线的回撤%, 当前交易的Adverse excursion %)
     # 对于每一行，取基于equity曲线的回撤百分比和Adverse excursion %的较大值
     combined_drawdown_pct = pd.concat([drawdown_from_equity, adverse_excursion_pct_abs], axis=1).max(axis=1)
     
-    # 9. 计算动态最大回撤：整个序列的最大值
-    max_dynamic_dd = combined_drawdown_pct.max()
+    # # 将combined_drawdown_pct添加到df中作为新列
+    # df['combined_drawdown_pct'] = combined_drawdown_pct
     
+    # # 8. 计算动态最大回撤：整个序列的最大值
+    max_dynamic_dd = combined_drawdown_pct.max()
+    # pd.set_option('display.max_rows', None)
+
+    # print(df[['Net P&L %','Adverse excursion %','equity_start','equity_end','running_peak', 'drawdown_from_equity', 'combined_drawdown_pct']])
+    # # 打印完成后，如果需要恢复默认设置（可选）
+    # pd.reset_option('display.max_rows')
     return max_dynamic_dd
 
 

@@ -9,18 +9,12 @@ def calculate_performance_metrics(df):
     """
     计算交易日志的整体绩效指标（包括百分比指标）
     按照PineScript逻辑计算最大回撤：考虑Adverse excursion %与基于累计盈亏的回撤的较大值
-    注意：每笔交易有2行（Entry和Exit），且两行的profit值相同
+    注意：df只包含Exit行，已经过滤掉Entry行
     """
     # 1. 整体收益率 (Net Profit %) - 按照复利计算
     # 使用每笔交易的Net P&L %进行累乘计算
-    # 注意：由于Entry和Exit的profit相同，我们只取Exit行来计算
-    exit_rows = df[df['Type'].str.contains('Exit', na=False)]
-    if len(exit_rows) == 0:
-        # 如果没有Exit行，则取每2行的最后一行（Exit应该在Entry之后）
-        exit_rows = df.iloc[1::2] if len(df) > 1 else df
-    
     # 获取每笔交易的Net P&L %（已经是百分比形式，如-0.74表示-0.74%）
-    profit_pct_list = exit_rows['Net P&L %'].values
+    profit_pct_list = df['Net P&L %'].values
     
     # 将百分比转换为小数形式（除以100），然后计算 (1 + profit%1) * (1 + profit%2) * ...
     # 例如：-0.74% -> -0.0074 -> (1 + (-0.0074)) = 0.9926
@@ -30,48 +24,18 @@ def calculate_performance_metrics(df):
     total_net_profit_pct = (cumulative_return - 1) * 100
     
     # 2. 交易总数 (Total Trades)
-    # 每笔交易有2行（Entry和Exit），所以交易总数是行数除以2
-    total_trades = len(df) // 2
+    # df只包含Exit行，所以交易总数就是行数
+    total_trades = len(df)
     
     # 3. 胜率 (Win Rate)
-    # 只计算Exit行的胜率，因为Entry和Exit的profit值相同
-    winning_trades_count = (exit_rows['Net P&L USD'] > 0).sum()
+    # 计算胜率：盈利交易数 / 总交易数
+    winning_trades_count = (df['Net P&L USD'] > 0).sum()
     # 计算胜率百分比：赢的次数 / 总次数 * 100
     win_rate = (winning_trades_count / total_trades) * 100 if total_trades > 0 else 0
     
-    # 4. 最大回撤 (Maximum Drawdown) - 按照PineScript逻辑
-    # 使用 'Cumulative P&L USD'（累计盈亏美元）列来计算
-    cumulative_pnl = df['Cumulative P&L USD']
-    
-    # 将累计盈亏加上初始本金，得到完整的资金曲线
-    equity_curve = INITIAL_EQUITY + cumulative_pnl
-    
-    # 计算资金曲线的峰值（到目前为止达到的最高点）序列
-    peak = equity_curve.cummax()
-    
-    # 计算基于累计盈亏曲线的回撤（峰值减去当前资金曲线值）
-    drawdown = peak - equity_curve
-    
-    # 计算基于累计盈亏曲线的回撤百分比
-    drawdown_pct_from_equity = (drawdown / peak) * 100
-    
-    # 获取Adverse excursion %列
-    # 注意：Adverse excursion %是负数，表示不利偏移百分比
-    # 在PineScript中，Adverse excursion %是相对于entry时的equity的百分比
-    # 我们需要将其转换为相对于当前equity的百分比，或者直接使用绝对值
-    adverse_excursion_pct = df['Adverse excursion %'].abs()
-    
-    # 按照PineScript逻辑：对于每一行，取基于累计盈亏的回撤百分比和Adverse excursion %的较大值
-    # 这样可以考虑持仓期间可能经历的最大回撤
-    # 注意：我们需要确保两个Series的长度相同
-    if len(drawdown_pct_from_equity) == len(adverse_excursion_pct):
-        combined_drawdown_pct = pd.concat([drawdown_pct_from_equity, adverse_excursion_pct], axis=1).max(axis=1)
-    else:
-        # 如果长度不同，使用numpy的maximum函数
-        combined_drawdown_pct = pd.Series(np.maximum(drawdown_pct_from_equity.values, adverse_excursion_pct.values))
-    
-    # 最大回撤百分比：所有行中回撤百分比的最大值
-    max_drawdown_pct = combined_drawdown_pct.max()
+    # 4. 最大回撤 (Maximum Drawdown) - 只计算交易close之后的最大回撤
+    # 使用 Net P&L % 进行复利计算，基于equity曲线计算最大回撤
+    max_drawdown_pct = calculate_simple_drawdown(df)
     
     # 返回一个字典，包含所有计算出的指标（只显示百分比格式）
     return {
@@ -80,6 +44,103 @@ def calculate_performance_metrics(df):
         "Win Rate (%)": win_rate,
         "Maximum Drawdown (%)": max_drawdown_pct
     }
+
+
+def calculate_simple_drawdown(df):
+    """
+    计算交易close之后的最大回撤（基于equity曲线）
+    只考虑每笔交易结算后的资金曲线，不考虑交易过程中的Adverse excursion
+    """
+    # 创建df的副本，避免修改原始数据
+    df = df.copy()
+    
+    # 1. 计算每笔交易结算后的账户资金 (Equity)
+    # 使用Net P&L %进行复利计算，假设初始资金为 1.0
+    # Net P&L %已经是百分比形式（如-0.74表示-0.74%），需要除以100转换为小数
+    net_pnl_pct = df['Net P&L %'].values / 100  # 转换为小数形式（如-0.74 -> -0.0074）
+    df['cum_pnl_factor'] = np.cumprod(1 + net_pnl_pct)
+    df['equity_end'] = df['cum_pnl_factor']  # 每笔交易结算后的资金
+    
+    # 2. 计算资金曲线的峰值（到目前为止达到的最高点）序列
+    peak = df['equity_end'].cummax()
+    
+    # 3. 计算回撤（峰值减去当前资金曲线值）
+    drawdown = peak - df['equity_end']
+    
+    # 4. 计算回撤百分比：回撤 / 峰值 * 100
+    drawdown_pct = (drawdown / peak) * 100
+    
+    # 5. 最大回撤百分比：所有行中回撤百分比的最大值
+    max_drawdown_pct = drawdown_pct.max()
+    
+    return max_drawdown_pct
+
+
+def calculate_advanced_dynamic_dd(df):
+    """
+    计算动态最大回撤
+    按照用户描述的逻辑：
+    1. 收益率10%, adverse_excursion = -5% -> 最大回撤 = -5%
+    2. 收益率-5%, adverse_excursion = -5.1% -> 最大回撤 = -5.1%
+    3. 收益率-0.5%, adverse_excursion = -1% -> 最大回撤 = -6%
+    
+    注意：
+    - Favorable excursion % 永远为非负数，已经是百分比形式（如13.24表示13.24%）
+    - Adverse excursion % 永远为非正数，已经是百分比形式（如-4.41表示-4.41%）
+    
+    逻辑：对于每一笔交易，计算动态最大回撤：
+    - 前一天的最大回撤 + 当前交易的Adverse excursion %（绝对值）
+    - 当前equity曲线的回撤%
+    - 当前交易的Adverse excursion %（绝对值）
+    取这些值的最大值，然后整个序列取最大值
+    """
+    # 创建df的副本，避免修改原始数据
+    df = df.copy()
+    
+    # 1. 计算每笔交易开始前的账户资金 (Equity)
+    # 使用Net P&L %进行复利计算，假设初始资金为 1.0
+    # Net P&L %已经是百分比形式（如-0.74表示-0.74%），需要除以100转换为小数
+    net_pnl_pct = df['Net P&L %'].values / 100  # 转换为小数形式（如-0.74 -> -0.0074）
+    df['cum_pnl_factor'] = np.cumprod(1 + net_pnl_pct)
+    df['equity_start'] = df['cum_pnl_factor'].shift(1).fillna(1.0)
+    
+    # 2. 计算交易过程中的 动态最高点 (Intra-trade Peak)
+    # 账户在此笔交易中达到的最高点 = 交易前资金 * (1 + 最大浮盈率)
+    # Favorable excursion %已经是百分比形式（如13.24表示13.24%），需要除以100转换为小数
+    favorable_excursion_pct = df['Favorable excursion %'].values / 100  # 转换为小数形式
+    df['intra_trade_high'] = df['equity_start'].values * (1 + favorable_excursion_pct)
+    
+    # 3. 计算结算后的 账户资金
+    df['equity_end'] = df['equity_start'].values * (1 + net_pnl_pct)
+    
+    # 4. 更新 历史全局最高点 (Running Peak)
+    # 历史最高点不仅看结算后的资金，也要看交易过程中的最大浮盈点
+    df['current_max'] = df[['intra_trade_high', 'equity_end']].max(axis=1)
+    df['running_peak'] = df['current_max'].cummax()
+    
+    # 5. 计算 动态最低点 (Intra-trade Low)
+    # 账户在此笔交易中达到的最低点 = 交易前资金 * (1 + 最大不利变动率)
+    # Adverse excursion %已经是百分比形式（如-4.41表示-4.41%），需要除以100转换为小数
+    adverse_excursion_pct = df['Adverse excursion %'].values / 100  # 转换为小数形式（已经是负数）
+    df['intra_trade_low'] = df['equity_start'].values * (1 + adverse_excursion_pct)
+    
+    # 6. 计算基于equity曲线的回撤百分比
+    # 回撤 = (峰值 - 当前最低点) / 峰值 * 100
+    drawdown_from_equity = (df['running_peak'] - df['intra_trade_low']) / df['running_peak'] * 100
+    
+    # 7. 获取Adverse excursion %（取绝对值，因为它是负数）
+    # Adverse excursion %已经是百分比形式，直接使用
+    adverse_excursion_pct_abs = df['Adverse excursion %'].abs()
+    
+    # 8. 按照用户描述的逻辑：当前的最大回撤 = max(之前所有交易的最大回撤, 当前equity曲线的回撤%, 当前交易的Adverse excursion %)
+    # 对于每一行，取基于equity曲线的回撤百分比和Adverse excursion %的较大值
+    combined_drawdown_pct = pd.concat([drawdown_from_equity, adverse_excursion_pct_abs], axis=1).max(axis=1)
+    
+    # 9. 计算动态最大回撤：整个序列的最大值
+    max_dynamic_dd = combined_drawdown_pct.max()
+    
+    return max_dynamic_dd
+
 
 def merge_alternating_trades(file_a_path, file_b_path):
     """
@@ -109,29 +170,8 @@ def merge_alternating_trades(file_a_path, file_b_path):
     # 使用 concat 将列表中的所有 DataFrame 片段合并成一个大的 DataFrame
     combined_df = pd.concat(merged_list).reset_index(drop=True)
     
-    # 重新计算合并后的"累计盈亏"，因为原始的累计盈亏是独立的
-    # 注意：由于Entry和Exit的profit值相同，我们需要只对Exit行计算累计盈亏
-    # 然后使用前向填充将值赋给Entry行
-    exit_mask = combined_df['Type'].str.contains('Exit', na=False)
-    if exit_mask.sum() == 0:
-        # 如果没有Exit行，则假设每2行的第二行是Exit（索引1, 3, 5...）
-        exit_mask = pd.Series([False] * len(combined_df))
-        if len(combined_df) > 0:
-            exit_mask.iloc[1::2] = True
-    
-    # 只对Exit行的profit进行cumsum（避免重复计算）
-    if exit_mask.sum() > 0:
-        exit_profits = combined_df.loc[exit_mask, 'Net P&L USD'].copy()
-        cumulative_pnl_exit = exit_profits.cumsum()
-        
-        # 将累计盈亏值赋给所有行（使用前向填充）
-        combined_df['Cumulative P&L USD'] = 0.0
-        combined_df.loc[exit_mask, 'Cumulative P&L USD'] = cumulative_pnl_exit.values
-        # 使用前向填充，将Exit行的累计盈亏值填充到对应的Entry行
-        combined_df['Cumulative P&L USD'] = combined_df['Cumulative P&L USD'].replace(0, pd.NA).ffill().fillna(0)
-    else:
-        # 如果没有Exit行，直接使用cumsum（虽然会重复计算，但至少能运行）
-        combined_df['Cumulative P&L USD'] = combined_df['Net P&L USD'].cumsum()
+    # 过滤掉Entry行，只保留Exit行
+    combined_df = combined_df[combined_df['Type'].str.contains('Exit', na=False)].reset_index(drop=True)
 
     # --- 打印绩效分析 ---
     print("--- 综合整体绩效分析 ---")
@@ -145,22 +185,9 @@ def merge_alternating_trades(file_a_path, file_b_path):
 
     print("\n--- A 策略独立绩效分析 ---")
     # 独立分析 A 策略的绩效
-    # 直接使用原始CSV中的累计盈亏列（如果存在）
+    # 过滤掉Entry行，只保留Exit行
     df_a_subset = df_a.head(min_len).copy()
-    # 确保累计盈亏列存在且有效
-    if 'Cumulative P&L USD' in df_a_subset.columns:
-        # 使用原始CSV中的累计盈亏，但需要确保Entry和Exit行的累计盈亏相同
-        # 由于Entry和Exit的profit相同，累计盈亏也应该相同，我们只取Exit行的累计盈亏
-        exit_mask_a = df_a_subset['Type'].str.contains('Exit', na=False)
-        if exit_mask_a.sum() == 0:
-            exit_mask_a = pd.Series([False] * len(df_a_subset))
-            if len(df_a_subset) > 0:
-                exit_mask_a.iloc[1::2] = True
-        # 只使用Exit行的累计盈亏，然后前向填充到Entry行
-        if exit_mask_a.sum() > 0:
-            exit_cumulative = df_a_subset.loc[exit_mask_a, 'Cumulative P&L USD'].copy()
-            df_a_subset.loc[exit_mask_a, 'Cumulative P&L USD'] = exit_cumulative.values
-            df_a_subset['Cumulative P&L USD'] = df_a_subset['Cumulative P&L USD'].replace(0, pd.NA).ffill().fillna(0)
+    df_a_subset = df_a_subset[df_a_subset['Type'].str.contains('Exit', na=False)].reset_index(drop=True)
     
     metrics_a = calculate_performance_metrics(df_a_subset)
     for key, value in metrics_a.items():
@@ -171,22 +198,9 @@ def merge_alternating_trades(file_a_path, file_b_path):
 
     print("\n--- B 策略独立绩效分析 ---")
     # 独立分析 B 策略的绩效
-    # 直接使用原始CSV中的累计盈亏列（如果存在）
+    # 过滤掉Entry行，只保留Exit行
     df_b_subset = df_b.head(min_len).copy()
-    # 确保累计盈亏列存在且有效
-    if 'Cumulative P&L USD' in df_b_subset.columns:
-        # 使用原始CSV中的累计盈亏，但需要确保Entry和Exit行的累计盈亏相同
-        # 由于Entry和Exit的profit相同，累计盈亏也应该相同，我们只取Exit行的累计盈亏
-        exit_mask_b = df_b_subset['Type'].str.contains('Exit', na=False)
-        if exit_mask_b.sum() == 0:
-            exit_mask_b = pd.Series([False] * len(df_b_subset))
-            if len(df_b_subset) > 0:
-                exit_mask_b.iloc[1::2] = True
-        # 只使用Exit行的累计盈亏，然后前向填充到Entry行
-        if exit_mask_b.sum() > 0:
-            exit_cumulative = df_b_subset.loc[exit_mask_b, 'Cumulative P&L USD'].copy()
-            df_b_subset.loc[exit_mask_b, 'Cumulative P&L USD'] = exit_cumulative.values
-            df_b_subset['Cumulative P&L USD'] = df_b_subset['Cumulative P&L USD'].replace(0, pd.NA).ffill().fillna(0)
+    df_b_subset = df_b_subset[df_b_subset['Type'].str.contains('Exit', na=False)].reset_index(drop=True)
     
     metrics_b = calculate_performance_metrics(df_b_subset)
     for key, value in metrics_b.items():

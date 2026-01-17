@@ -1,0 +1,30 @@
+//@version=5
+strategy("MA 5/30 Crossover Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// 输入参数
+ma5_length = input(5, title="MA 5 Length")
+ma30_length = input(30, title="MA 30 Length")
+
+// 计算移动平均线
+ma5 = ta.sma(close, ma5_length)
+ma30 = ta.sma(close, ma30_length)
+
+// 交易信号
+// 买入条件：价格上穿 MA5 且 MA5 上穿 MA30
+buy_condition = ta.crossover(ma5, ma30)
+// 卖出条件：价格下穿 MA5 且 MA5 下穿 MA30
+sell_condition = ta.crossunder(ma5, ma30)
+
+// 执行交易
+if (buy_condition)
+    strategy.entry("Long", strategy.long)
+if (sell_condition)
+    strategy.close("Long")
+
+// 绘图
+plot(ma5, title="MA 5", color=color.red, linewidth=2)
+plot(ma30, title="MA 30", color=color.blue, linewidth=2)
+
+// 可选：标记买卖点
+plotshape(buy_condition, title="Buy Signal", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+plotshape(sell_condition, title="Sell Signal", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)

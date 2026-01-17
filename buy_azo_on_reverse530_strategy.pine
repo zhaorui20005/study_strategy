@@ -1,0 +1,42 @@
+//@version=5
+// 注意：这里设置 overlay=true 以便在主图看到 A 的 K 线，但我们会通过 display.pane 将 B 的指标送往副图
+strategy("B-Symbol Analytics (Sub-chart)", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// --- 输入参数 ---
+tickerB = input.symbol("NASDAQ:TSLA", title="目标参考股票 B")
+ma5_len = input.int(5, title="B 的 MA 5 周期")
+ma30_len = input.int(30, title="B 的 MA 30 周期")
+
+// --- 获取股票 B 的数据 ---
+[priceB, highB, lowB] = request.security(tickerB, timeframe.period, [close, high, low])
+
+// --- 在 B 的价格基础上计算均线 ---
+ma5_B  = ta.sma(priceB, ma5_len)
+ma30_B = ta.sma(priceB, ma30_len)
+
+// --- 交易逻辑 (在主图 A 上执行) ---
+b_bullish = ta.crossover(ma5_B, ma30_B)
+b_bearish = ta.crossunder(ma5_B, ma30_B)
+
+if (b_bearish)
+    strategy.entry("LongA", strategy.long, comment="根据B金叉买入A")
+if (b_bullish)
+    strategy.close("LongA", comment="根据B死叉平仓A")
+
+// --- 绘图：将 B 的数据画在副图 ---
+// 使用 display = display.pane_5 (或其他非主图区域) 
+// 在最新版 Pine Script 中，最稳妥的方法是使用 plot 的扩展功能，或者直接看下面的独立坐标写法
+
+// 1. 画 B 的收盘价 (副图)
+plot(priceB, "B 价格", color=color.new(color.gray, 50), style=plot.style_line, display=display.none) 
+
+// 2. 重点：使用 `force_overlay=false` 的特殊技巧在不同坐标系绘图
+// 我们通过 plot 的属性将 B 的均线放在一个独立的垂直坐标轴上
+plot(priceB, "B 价格基准", color=color.new(color.white, 0), display=display.pane) // 这是一个占位符
+plot(ma5_B, "B 的 MA5", color=color.orange, linewidth=2, force_overlay=false)
+plot(ma30_B, "B 的 MA30", color=color.blue, linewidth=2, force_overlay=false)
+
+// --- 在主图标记信号点 ---
+plotshape(b_bullish, "B金叉信号", style=shape.labeldown, location=location.belowbar, color=color.red, text="A Sell", textcolor=color.white, size=size.small)
+plotshape(b_bearish, "B死叉信号", style=shape.labelup, location=location.abovebar, color=color.green, text="A Buy", textcolor=color.white, size=size.small)
+

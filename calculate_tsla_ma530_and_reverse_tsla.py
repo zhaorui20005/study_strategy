@@ -75,7 +75,6 @@ def plot_equity_curve(df, title="Equity Curve"):
     intra_trade_low = equity_start * (1 + adverse_excursion_pct)
     
     # 计算统计信息
-    total_pnl = df['Net P&L USD'].sum()
     total_trades = len(df)
     profit_trades = (df['Net P&L USD'] > 0).sum()
     total_profit = df[df['Net P&L USD'] > 0]['Net P&L USD'].sum()
@@ -87,6 +86,12 @@ def plot_equity_curve(df, title="Equity Curve"):
     running_peak = pd.Series(equity_start).cummax().values
     drawdown_from_equity = (running_peak - intra_trade_low) / running_peak * 100
     max_drawdown = drawdown_from_equity.max()
+    
+    # 计算Total P&L - 基于equity曲线（复利计算）
+    # 使用equity曲线的最终值减去初始值
+    final_equity = equity_curve[-1]
+    total_pnl = final_equity - INITIAL_EQUITY
+    total_pnl_pct = (total_pnl / INITIAL_EQUITY) * 100
     
     # 创建图形
     fig, ax = plt.subplots(figsize=(14, 8))
@@ -142,9 +147,6 @@ def plot_equity_curve(df, title="Equity Curve"):
         ylabel = 'Equity (USD, Log Scale)'
     else:
         ylabel = 'Equity (USD)'
-    
-    # 计算Total P&L百分比
-    total_pnl_pct = (total_pnl / INITIAL_EQUITY) * 100
     
     # 计算Profit Trades百分比（胜率）
     profit_trades_pct = (profit_trades / total_trades * 100) if total_trades > 0 else 0

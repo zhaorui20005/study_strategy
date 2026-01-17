@@ -164,7 +164,7 @@ def plot_equity_curve(df, title="Equity Curve"):
     # 设置标签和标题
     ax.set_xlabel('Trade Number', fontsize=12)
     ax.set_ylabel(ylabel, fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)  # 增加标题的上边距
     ax.grid(True, alpha=0.3)
     
     # 图例放在左上角，避免与统计信息框重叠
@@ -174,7 +174,8 @@ def plot_equity_curve(df, title="Equity Curve"):
     if not use_log_scale:
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x/1000:.0f}K'))
     
-    plt.tight_layout()
+    # 调整布局，确保标题完全显示
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # 留出顶部空间给标题
     return fig
 
 
@@ -316,17 +317,20 @@ def merge_alternating_trades(file_a_path, file_b_path):
     print("\n--- 生成图表 ---")
     # 绘制综合整体图表
     fig1 = plot_equity_curve(combined_df, title="Combined Strategy - Equity Curve")
-    plt.savefig('combined_strategy_equity_curve.png', dpi=300, bbox_inches='tight')
+    plt.savefig('combined_strategy_equity_curve.png', dpi=300, bbox_inches='tight', pad_inches=0.3)
+    plt.close(fig1)
     print("已保存: combined_strategy_equity_curve.png")
     
     # 绘制A策略图表
     fig2 = plot_equity_curve(df_a_subset, title="buy tsla on ma530 strategy - Equity Curve")
-    plt.savefig('strategy_A_equity_curve.png', dpi=300, bbox_inches='tight')
+    plt.savefig('strategy_A_equity_curve.png', dpi=300, bbox_inches='tight', pad_inches=0.3)
+    plt.close(fig2)
     print("已保存: strategy_A_equity_curve.png")
     
     # 绘制B策略图表
     fig3 = plot_equity_curve(df_b_subset, title="buy azo on sell tsla on ma530 strategy - Equity Curve")
-    plt.savefig('strategy_B_equity_curve.png', dpi=300, bbox_inches='tight')
+    plt.savefig('strategy_B_equity_curve.png', dpi=300, bbox_inches='tight', pad_inches=0.3)
+    plt.close(fig3)
     print("已保存: strategy_B_equity_curve.png")
     
     # 显示图表（可选，如果不需要显示可以注释掉）

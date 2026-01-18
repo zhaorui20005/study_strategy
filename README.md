@@ -52,7 +52,11 @@
     ma530策略:                            ./ma530_crossover_strategy.pine
     ma530_reverse策略:                    ./buy_azo_on_reverse530_strategy.pine
 
+# 步骤
 
+1. 用AI生成一个ma530策略,然后在特斯拉股票上面跑出92笔交易,将交易数据下载下来,保存成trades_strategy_A.csv
+2. 用AI生成一个逆ma530策略,在AZO上面生成92笔交易,第92笔交易其实是未完成,但是也会生成出来,保存成trades_strategy_B.csv
+3. 使用Python,用AI生成程序把两个文件合并,计算各项指标.(这一步,一定要多多review代码的逻辑,其中,tv生成的数据包含entry, exit,但是其实两行数据大部分相同,只有入场价格和出厂价格不同,我们需要取出exit行即可,否则将会处理重复的收益,其次AI生成的代码可能很傻,第一次生成的收益率直接给我全部相加;最大回撤直接按照每笔交易close之后算,没有考虑交易过程中浮亏带来的回撤,生成的结果就会偏小)
 
 # 备注
 
